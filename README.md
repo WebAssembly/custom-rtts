@@ -1,18 +1,11 @@
-![Spectec Status](https://github.com/Wasm-DSL/spectec/actions/workflows/ci-spectec.yml/badge.svg)
-![Interpreter Status](https://github.com/Wasm-DSL/spectec/actions/workflows/ci-interpreter.yml/badge.svg)
-![Spec doc Status](https://github.com/Wasm-DSL/spectec/actions/workflows/ci-spec.yml/badge.svg)
+# Custom RTTs
 
-[![CI for specs](https://github.com/Wasm-DSL/spectec/actions/workflows/ci-spec.yml/badge.svg)](https://github.com/Wasm-DSL/spectec/actions/workflows/ci-spec.yml)
-[![CI for interpreter & tests](https://github.com/Wasm-DSL/spectec/actions/workflows/ci-interpreter.yml/badge.svg)](https://github.com/Wasm-DSL/spectec/actions/workflows/ci-interpreter.yml)
-
-
-# WebAssembly SpecTec
-
-This repository is a clone of the `wasm-3.0` branch of [github.com/WebAssembly/spec/](https://github.com/WebAssembly/spec/).
-It contains the prototype implementation of [SpecTec](spectec/README.md) and a version of the core spec document modified to be built with SpecTec.
+This repository contains the WebAssembly proposal for custom RTTs and JS interop for Wasm GC structs.
+It is based on the [SpecTec fork](https://github.com/Wasm-DSL/spectec) of the spec repository,
+which is in turn based on the `wasm-3.0` branch of [github.com/WebAssembly/spec/](https://github.com/WebAssembly/spec/).
+See the [overview](proposals/custom-rtts/Overview.md) for more information.
 
 Original `README` from upstream repository follows...
-
 
 # spec
 
