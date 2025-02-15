@@ -353,7 +353,85 @@ C |- br_on_cast_rtt_fail l rt_1 rt_2 : t* rt_1 (ref null exact_1 y) -> t* rt_2
 
 ## JS Prototypes
 
-TODO
+In JS engines,
+WebAssembly RTTs correspond to JS shape descriptors.
+Custom RTTs act as first-class handles to the engine-managed RTTs,
+so they can serve as extension points for the JS reflection of the Wasm objects they describe.
+
+We introduce a new `WebAssembly.setDescriptorPrototype()` API
+that takes a custom RTT instance and a prototype object.
+The provided prototype will be attached to the custom RTT
+and will become the prototype for the JS reflection
+of all Wasm objects the custom RTT describes.
+
+The following is a full example that uses `WebAssembly.setDescriptorPrototype()`
+to allow JS to call `get()` and `inc()` methods on counter objects implemented in
+WebAssembly.
+
+> Note: If there is demand for it,
+> a similar API could configure property names that JS could use to access fields
+> of the described WebAssembly objects.
+
+```wasm
+;; counter.wasm
+(module
+  (rec
+    (type $counter (struct (descriptor $counter.vtable (field $val i32))))
+    (type $counter.vtable (struct
+      (describes $counter)
+      (field $get (ref $get_t))
+      (field $inc (ref $inc_t))
+    ))
+    (type $get_t (func (param (ref null $counter)) (result i32)))
+    (type $inc_t (func (param (ref null $counter))))
+  )
+
+  (elem declare func $counter.get $counter.inc)
+
+  (global $counter.vtable (export "counter.vtable") (ref exact $counter.vtable)
+    (struct.new $counter.vtable
+      (ref.func $counter.get)
+      (ref.func $counter.inc)
+    )
+  )
+
+  (global $counter (export "counter") (ref $counter)
+    (struct.new_default $counter
+      (global.get $counter.vtable)
+    )
+  )
+
+  (func $counter.get (export "counter.get") (type $get_t) (param (ref null $counter)) (result i32)
+    (struct.get $counter $val (local.get 0))
+  )
+
+  (func $counter.inc (export "counter.inc") (type $inc_t) (param (ref null $counter))
+    (struct.set $counter $val
+      (local.get 0)
+      (i32.add
+        (struct.get $counter $val (local.get 0))
+        (i32.const 1)
+      )
+    )
+  )
+)
+```
+
+```js
+// counter.js
+var {module, instance} = await WebAssembly.instantiateStreaming(fetch('counter.wasm'));
+
+WebAssembly.setDescriptorPrototype(instance.exports['counter.vtable'], {
+  get: function() { instance.exports['counter.get'](this); },
+  inc: function() { return instance.exports['counter.get'](this); }
+});
+
+var counter = instance.exports['counter'];
+
+console.log(counter.get()); // 0
+counter.inc();
+console.log(counter.get()); // 1
+```
 
 ## Declarative Prototype Initialization
 
