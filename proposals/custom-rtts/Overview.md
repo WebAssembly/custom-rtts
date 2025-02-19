@@ -440,3 +440,136 @@ TODO
 ## Type Section Field Deduplication
 
 TODO
+
+## Binary Format
+
+### Describes and Desciptor Clauses
+
+In the formal syntax,
+we insert optional descriptor and describes clauses between `comptype`
+(or `sharecomptype` from shared-everything-threads)
+and `subtype`:
+
+```
+descriptorcomptype ::=
+  | 0x4D x:typeidx ct:sharecomptype => (descriptor x ct)
+  | ct:sharecomptype => ct
+
+describescomptype ::=
+  | 0x4C x:typeidx ct:descriptorcomptype => (describes x ct)
+  | ct:descriptorcomptype => ct
+
+subtype ::=
+  | 0x50 x*:vec(typeidx) ct:describescomptype => sub x* ct
+  | 0x4F x*:vec(typeidx) ct:describescomptype => sub final x* ct
+  | ct:describescomptype => sub final eps ct
+```
+
+> TODO: Update the text format in the examples above to reflect this
+> factoring of the syntax.
+
+### Exact Reference Types
+
+Rather than use two new opcodes in the type opcode space
+to represent nullable and non-nullable exact reference types,
+we introduce just a single new prefix opcode that encode both:
+
+```
+reftype :: ...
+  | 0x62 0x64 ht:heaptype => ref exact ht
+  | 0x62 0x63 ht:heaptype => ref null exact ht
+```
+
+To make the most of the existing shorthands for nullable abstract heap types,
+we also allow using the exact prefix with those shorthands:
+
+```
+reftype :: ...
+  | 0x62 ht:absheaptype => ref null exact ht
+```
+
+### Instructions
+
+The existing `ref.test`, `ref.cast`, `br_on_cast` and `br_on_cast_fail` instructions
+need to be able to work with exact reference types.
+`ref.test` and `ref.cast` currently have two opcodes each:
+one for nullable target types and one for non-nullable target types.
+Rather than introducing two new opcodes for each of these instructions
+to allow for nullable exact and non-nullable exact target types,
+we introduce one new opcode for each that takes a full reference type
+rather than a heap type as its immediate.
+
+```
+instr ::= ...
+  | 0xFB 32:u32 rt:reftype => ref.test rt
+  | 0xFB 33:u32 rt:reftype => ref.cast rt
+```
+
+(`0xFB 31` is already used by `ref.i31_shared` in the shared-everything-threads proposal.)
+
+Note that these new encodings can be used instead of the existing encodings
+to represent casts to inexact reference types.
+
+> Note: We could alternatively restrict the new encoding to be usable only with exact types,
+> but this artificial restriction does not seem useful.
+
+> Note: We could alternatively continue the existing encoding scheme,
+> at the cost of using 4 new opcodes instead of 2.
+
+`br_on_cast` and `br_on_cast_fail` already encode the nullability of their
+input and output types in a "castflags" u8 immediate. Castflags is extended to encode
+exactness as well:
+
+```
+castflags ::= ...
+  | 4:u8 => (exact, eps)
+  | 5:u8 => (null exact, eps)
+  | 6:u8 => (exact, null)
+  | 7:u8 => (null exact, null)
+  | 8:u8 => (eps, exact)
+  | 9:u8 => (null, exact)
+  | 10:u8 => (eps, null exact)
+  | 11:u8 => (null, null exact)
+  | 12:u8 => (exact, exact)
+  | 13:u8 => (null exact, exact)
+  | 14:u8 => (exact, null exact)
+  | 15:u8 => (null exact, null exact)
+```
+
+Note that the bits now have the following meanings:
+
+```
+bit 0: source nullability
+bit 1: target nullability
+bit 3: source exactness
+bit 4: target exactness
+```
+
+The other new instructions are encoded as follows:
+
+```
+instr ::= ...
+  | 0xFB 34:u32 x:typeidx => ref.get_rtt x
+  | 0xFB 35:u32 rt:reftype => ref.cast_rtt reftype
+  | 0xFB 36:u32 (null_1? exact_1?, null_2? exact_2?):castflags
+        l:labelidx ht_1:heaptype ht_2:heaptype =>
+      br_on_cast_rtt l (ref null_1? exact_1? ht_1) (ref null_2? exact_2? ht_2)
+  | 0xFB 37:u32 (null_1? exact_1?, null_2? exact_2?):castflags
+        l:labelidx ht_1:heaptype ht_2:heaptype =>
+      br_on_cast_rtt_fail l (ref null_1? exact_1? ht_1) (ref null_2? exact_2? ht_2)
+```
+
+## Minimal Initial Prototyping for JS Interop
+
+A truly minimal prototype for experimenting with JS interop can skip
+implementing most of the new features in this proposal:
+
+ - Arbitrary fields on custom RTTs.
+   A minimal prototype can allow `descriptor` clauses only on empty structs.
+ - Exact reference types.
+   A minimal prototype can instead bake a custom RTT exactness check into the
+   semantics of `struct.new` and `struct.new_default` to ensure soundness.
+ - New instructions.
+   A minimal prototype only needs to update `struct.new` and `struct.new_default`
+   to take references to custom RTTs as necessary.
+   It does not need to implement `ref.get_rtt` or any of the new RTT casts.
