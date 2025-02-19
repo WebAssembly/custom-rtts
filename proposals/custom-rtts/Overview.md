@@ -446,23 +446,27 @@ TODO
 ### Describes and Desciptor Clauses
 
 In the formal syntax,
-we insert optional descriptor and describes clauses between `comptype`
-(or `sharecomptype` from shared-everything-threads)
-and `subtype`:
+we insert optional descriptor and describes clauses between `comptype` and `subtype`.
+(Sharedness from the shared-everything-threads proposal goes outside these new clauses,
+and is included below only to clarify the interaction between proposals.)
 
 ```
 descriptorcomptype ::=
-  | 0x4D x:typeidx ct:sharecomptype => (descriptor x ct)
-  | ct:sharecomptype => ct
+  | 0x4D x:typeidx ct:comptype => (descriptor x ct)
+  | ct:comptype => ct
 
 describescomptype ::=
   | 0x4C x:typeidx ct:descriptorcomptype => (describes x ct)
   | ct:descriptorcomptype => ct
 
+sharecomptype ::=
+  | 0x65 ct:describescomptype => (shared ct)
+  | ct:describescomptype => ct
+
 subtype ::=
-  | 0x50 x*:vec(typeidx) ct:describescomptype => sub x* ct
-  | 0x4F x*:vec(typeidx) ct:describescomptype => sub final x* ct
-  | ct:describescomptype => sub final eps ct
+  | 0x50 x*:vec(typeidx) ct:sharecomptype => sub x* ct
+  | 0x4F x*:vec(typeidx) ct:sharecomptype => sub final x* ct
+  | ct:sharecomptype => sub final eps ct
 ```
 
 > TODO: Update the text format in the examples above to reflect this
