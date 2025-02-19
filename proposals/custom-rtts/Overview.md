@@ -1,17 +1,17 @@
-# Custom RTTs and JS Interop for WasmGC Structs
+# Custom Descriptors and JS Interop for WasmGC Structs
 
 This proposal primarily provides mechanisms to:
 
  1. Save memory in WasmGC structs by allowing data associated with source types
     (e.g. static fields, vtables, itables, etc.)
-    to be stored alongside the engine-managed type information
-    in a custom runtime type object (RTT) for their corresponding WebAssembly types.
+    to be stored alongside the engine-managed runtime type information (RTT)
+    in a custom descriptor object for their corresponding WebAssembly types.
     Rather than using a user-controlled reference field
     to point to this type-associated information,
     structs can now use the RTT reference in their engine-managed header
     to refer to this information.
 
- 1. Associate JS prototypes with WasmGC structs by storing them on the custom RTT,
+ 1. Associate JS prototypes with WasmGC structs via custom descriptors,
     allowing methods to be called on WasmGC structs from JS.
 
 Secondarily, this proposal provides mechanisms
@@ -27,20 +27,21 @@ to alleviate anticipated problems that will arise from the use of its primary fe
 We should validate that these problem actually arise in practice and quantify their cost
 before we commit to including these extra solutions in the final version of the proposal.
 
-## Custom RTT Definitions
+This proposal and the custom descriptors are informally called "custom RTTs,"
+although the RTT is more precisely the engine-managed type information inside the custom descriptor,
+not the custom descriptor itself.
 
-Custom RTT types are defined struct types with a `describes` clause saying
+## Custom Descriptor Definitions
+
+Custom descriptor types are defined struct types with a `describes` clause saying
 what other defined struct type they contain runtime type information for.
-Similarly, struct types that use custom RTTs have a `descriptor` clause saying
-what type their custom RTTs have.
-
-> Note: If we want to lean into the "RTT" terminology, `describes` and `descriptor`
-> could instead be `rtt-for` and `with-rtt` or similar.
+Similarly, struct types that use custom descriptors have a `descriptor` clause saying
+what type their custom descriptors have.
 
 ```wasm
 (rec
-  (type $foo (struct (descriptor $foo.rtt) (field ...)))
-  (type $foo.rtt (struct (describes $foo) (field ...)))
+  (type $foo (descriptor $foo.rtt (struct (field ...))))
+  (type $foo.rtt (describes $foo (struct (field ...))))
 )
 ```
 
@@ -58,13 +59,13 @@ but type `$C` is different.
 
 ```wasm
 (rec
-  (type $A (struct (descriptor $A.rtt) (field i32)))
-  (type $A.rtt (struct (describes $A) (field i32)))
+  (type $A (descriptor $A.rtt (struct (field i32))))
+  (type $A.rtt (describes $A (struct (field i32))))
 )
 
 (rec
-  (type $B (struct (descriptor $B.rtt) (field i32)))
-  (type $B.rtt (struct (describes $B) (field i32)))
+  (type $B (descriptor $B.rtt (struct (field i32))))
+  (type $B.rtt (describes $B (struct (field i32))))
 )
 
 (rec
@@ -79,9 +80,9 @@ creating arbitrarily long chains of meta-descriptors:
 
 ```wasm
 (rec
-  (type $foo (struct (descriptor $foo.rtt)))
-  (type $foo.rtt (struct (describes $foo) (descriptor $foo.meta-rtt)))
-  (type $foo.meta-rtt (struct (describes $foo.rtt)))
+  (type $foo (descriptor $foo.rtt (struct)))
+  (type $foo.rtt (describes $foo (descriptor $foo.meta-rtt (struct))))
+  (type $foo.meta-rtt (describes $foo.rtt (struct)))
 )
 ```
 
@@ -96,18 +97,18 @@ which in turn must have a `descriptor` clause referring to the describing type.
 ```wasm
 (rec
   (type $A (struct))
-  (type $B (struct (descriptor $C)))
-  (type $C (struct (describes $A))) ;; Invalid: must be 'describes $B'
+  (type $B (descriptor $C (struct)))
+  (type $C (describes $A (struct))) ;; Invalid: must be 'describes $B'
 )
 ```
 
 > Note: This rule means that the `describes` clause is redundant
 > and could be inferred from the existence of the `descriptor` clause,
-> but we require the `describes` clause anyway so the layout of the custom RTT type
+> but we require the `describes` clause anyway so the layout of the custom descriptor type
 > can be determined just by looking at its definition.
 
 It is also invalid for a type to be its own descriptor,
-or more generally for it to appear in its descriptor chain.
+or more generally for it to appear in its own descriptor chain.
 This is statically enforced by validating that `describes` clauses may only refer
 to previously defined types.
 This is the same strategy we use for ensuring supertype chains do not have cycles.
@@ -115,15 +116,15 @@ This is the same strategy we use for ensuring supertype chains do not have cycle
 ```wasm
 (rec
   ;; Invalid describes clause: $self is not a previously defined type.
-  (type $self (struct (describes $self) (descriptor $self)))
+  (type $self (describes $self (descriptor $self (struct))))
 
   ;; Invalid describes clause: $pong is not a previously defined type.
-  (type $ping (struct (describes $pong) (descriptor $pong)))
-  (type $pong (struct (describes $ping) (descriptor $ping)))
+  (type $ping (describes $pong (descriptor $pong (struct))))
+  (type $pong (describes $ping (descriptor $ping (struct))))
 
   ;; Invalid describes clause: $foo is not a previously defined type.
-  (type $foo.rtt (struct (describes $foo)))
-  (type $foo (struct (descriptor $foo.rtt)))
+  (type $foo.rtt (describes $foo (struct)))
+  (type $foo (descriptor $foo.rtt (struct)))
 )
 ```
 
@@ -146,44 +147,44 @@ However, the following new subtyping rules are introduced:
 
 The first two rules,
 governing types with or without `descriptor` clauses,
-are necessary to ensure the soundness of the `ref.get_rtt` instruction described below.
+are necessary to ensure the soundness of the `ref.get_desc` instruction described below.
 The latter two rules,
 governing types with or without `describes` clauses,
 are necessary to ensure subtypes have layouts compatible with their supertypes.
-Custom RTT types (i.e. those with `describes` clauses)
+Custom descriptor types (i.e. those with `describes` clauses)
 have different layouts than other structs because their user-controlled fields
 are laid out after the engine-managed RTT for the type they describe.
 
 ```wasm
 (rec
-  (type $super (sub (struct (descriptor $super.rtt))))
-  (type $super.rtt (sub (struct (describes $super))))
+  (type $super (sub (descriptor $super.rtt (struct))))
+  (type $super.rtt (sub (describes $super (struct))))
 
   ;; Ok
-  (type $sub (sub $super (struct (descriptor $sub.rtt))))
-  (type $sub.rtt (sub $super.rtt (struct (describes $sub))))
+  (type $sub (sub $super (descriptor $sub.rtt (struct))))
+  (type $sub.rtt (sub $super.rtt (describes $sub (struct))))
 )
 
 (rec
   (type $super (sub (struct)))
 
   ;; Ok
-  (type $sub (sub $super (struct (descriptor $sub.rtt))))
-  (type $sub.rtt (struct (describes $sub)))
+  (type $sub (sub $super (descriptor $sub.rtt (struct))))
+  (type $sub.rtt (describes $sub (struct)))
 )
 
 (rec
-  (type $super (sub (struct (descriptor $super.rtt))))
-  (type $super.rtt (sub (struct (describes $super))))
+  (type $super (sub (descriptor $super.rtt (struct ))))
+  (type $super.rtt (sub (describes $super (struct))))
 
   ;; Ok (but strange)
   (type $other (struct))
-  (type $sub.rtt (sub $super.rtt (struct (describes $other))))
+  (type $sub.rtt (sub $super.rtt (describes $other (struct))))
 )
 
 (rec
-  (type $super (sub (struct (descriptor $super.rtt))))
-  (type $super.rtt (sub (struct (describes $super))))
+  (type $super (sub (descriptor $super.rtt (struct))))
+  (type $super.rtt (sub (describes $super (struct))))
 
   ;; Invalid: Must be described by an immediate subtype of $super.rtt.
   (type $sub (sub $super (struct)))
@@ -193,12 +194,12 @@ are laid out after the engine-managed RTT for the type they describe.
 )
 
 (rec
-  (type $super (sub (struct (descriptor $super.rtt))))
-  (type $super.rtt (sub (struct (describes $super))))
+  (type $super (sub (descriptor $super.rtt (struct))))
+  (type $super.rtt (sub (describes $super (struct))))
 
   ;; Invalid: $other.rtt must be a an immediate subtype of $super.rtt.
-  (type $sub (sub $super (struct (descriptor $other.rtt))))
-  (type $other.rtt (struct (describes $sub)))
+  (type $sub (sub $super (descriptor $other.rtt (struct))))
+  (type $other.rtt (describes $sub (struct)))
 )
 ```
 
@@ -210,20 +211,35 @@ are laid out after the engine-managed RTT for the type they describe.
 > This would make certain code patterns and transformations incorrect only for these types,
 > so they may be more trouble than they are worth.
 
+In addition to the above rules,
+we also restrict `describes` and `descriptor` clauses
+to appear only on struct type definitions.
+This may be relaxed in the future.
+
+```wasm
+(rec
+  ;; Invalid: descriptor clauses may only be used with structs.
+  (type $array (descriptor $array.rtt (array i8)))
+
+  ;; Invalid: describes clauses may only be used with structs.
+  (type $array.rtt (describes $array (func)))
+)
+```
+
 ## Exact Reference Types
 
-Allocating an instance of a type with a custom RTT necessarily
-requires supplying a custom RTT value.
+Allocating an instance of a type with a custom descriptor necessarily
+requires supplying a custom descriptor value.
 Specified naively,
 this could allow the following unsound program to validate and run:
 
 ```wasm
 (rec
-  (type $foo (sub (struct (descriptor $foo.rtt))))
-  (type $foo.rtt (sub (struct (describes $foo))))
+  (type $foo (sub (descriptor $foo.rtt (struct))))
+  (type $foo.rtt (sub (describes $foo (struct))))
 
-  (type $bar (sub $foo (struct (descxriptor $bar.rtt) (field $bar-only i32))))
-  (type $bar.rtt (sub $foo.rtt (struct (describes $bar))))
+  (type $bar (sub $foo (descriptor $bar.rtt (struct (field $bar-only i32)))))
+  (type $bar.rtt (sub $foo.rtt (describes $bar (struct))))
 )
 
 (func $unsound (result i32)
@@ -242,13 +258,13 @@ this could allow the following unsound program to validate and run:
 The problem here is that the normal subtyping rules make it possible
 to allocate a `$foo` with an RTT for `$bar`,
 causing subsequent casts to behave incorrectly.
-One solution would be to have `struct.new` dynamically check that the provided RTT value
+One solution would be to have `struct.new` dynamically check that the provided descriptor value
 describes precisely the allocated type.
 A better solution would be to allow userspace to perform that check if necessary,
 but also be able to statically prove via the type system that it is not necessary.
 
-To facilitate that, we introduce exact reference types,
-which are inhabited by references to a particular heap type (and possibly the null value)
+To facilitate that we introduce exact reference types,
+which are inhabited by references to a particular heap type (and possibly the null value),
 but not any of the heap type's strict subtypes.
 
 Exact reference types can be nullable with the form `(ref exact null ht)`
@@ -289,80 +305,83 @@ When allocating types with custom RTTs,
 as their first operands.
 This makes the unsound program above invalid.
 
+> TODO: Provide new validation rules for `struct.new` and `struct.new_default`.
+
 ## New Instructions
 
-Given a reference to a type with a custom RTT,
-a reference to the custom RTT value can be retrieved with `ref.get_rtt`.
+Given a reference to a type with a custom descriptor,
+a reference to the custom descriptor value can be retrieved with `ref.get_desc`.
 
 ```
-ref.get_rtt typeidx
+ref.get_desc typeidx
 
-C |- ref.get_rtt x : (ref exact_1 null x) -> (ref exact_1 y)
--- C.types[x] ~ struct (descriptor y) field*
+C |- ref.get_desc x : (ref exact_1 null x) -> (ref exact_1 y)
+-- C.types[x] ~ descriptor y ct
 ```
 
 If the provided reference is exact,
-then the type of the custom RTT is known precisely,
+then the type of the custom descriptor is known precisely,
 so the result can be exact as well.
-Otherwise, the subtyping rules described above ensure that there will be some custom RTT value
-and that it will be a subtype of the custom RTT type for `x`,
+Otherwise, the subtyping rules described above ensure that there will be some custom descriptor value
+and that it will be a subtype of the custom descriptor type for `x`,
 so the result can be a non-null inexact reference.
 
-Being able to retrieve a custom RTT means you can then compare it for equality
-with an expected custom RTT value.
+Being able to retrieve a custom descriptor means you can then compare it for equality
+with an expected custom descriptor value.
 If the values are equal,
-that lets you reason about the type of the value the custom RTT was attached to.
+that lets you reason about the type of the value the custom descriptor was attached to.
 But the type system cannot make those logical deductions on its own,
-so to help it out we introduce a new set of cast instructions that take custom RTTs
+so to help it out we introduce a new set of cast instructions that take custom descriptors
 as additional operands.
-These instructions compare the RTT of the provided reference with the provided RTT and if they match,
-return the provided reference with the type described by the RTT.
-If the type of the RTT is exact,
+These instructions compare the descriptor of the provided reference with the provided descriptor,
+and if they match,
+return the provided reference with the type described by the descriptor.
+If the type of the descriptor is exact,
 then the type of the cast output can also be exact.
 
 ```
-ref.cast_rtt reftype
+ref.cast_desc reftype
 
-C |- ref.cast_rtt rt : (ref null ht) (ref null exact_1 y) -> rt
+C |- ref.cast_desc rt : (ref null ht) (ref null exact_1 y) -> rt
 -- rt = (ref null? exact_1 x)
 -- C |- C.types[x] <: ht
--- C.types[x] = struct (descriptor y) field*
+-- C.types[x] ~ descriptor y ct
 ```
 
 ```
-br_on_cast_rtt labelidx reftype reftype
+br_on_cast_desc labelidx reftype reftype
 
-C |- br_on_cast_rtt l rt_1 rt_2 : t* rt_1 (ref null exact_1 y) -> t* (rt_1 \ rt_2)
+C |- br_on_cast_desc l rt_1 rt_2 : t* rt_1 (ref null exact_1 y) -> t* (rt_1 \ rt_2)
 -- C.labels[l] = t* rt
 -- C |- rt_2 <: rt
 -- C |- rt_2 <: rt_1
 -- rt_2 = (ref null? exact_1 x)
--- C.types[x] = struct (descriptor y) field*
+-- C.types[x] ~ descriptor y ct
 ```
 
 ```
-br_on_cast_rtt_fail labelidx reftype reftype
+br_on_cast_desc_fail labelidx reftype reftype
 
-C |- br_on_cast_rtt_fail l rt_1 rt_2 : t* rt_1 (ref null exact_1 y) -> t* rt_2
+C |- br_on_cast_desc_fail l rt_1 rt_2 : t* rt_1 (ref null exact_1 y) -> t* rt_2
 -- C.labels[l] = t* rt
 -- C |- rt_1 \ rt_2 <: rt
 -- C |- rt_2 <: rt_1
 -- rt_2 = (ref null? exact_1 x)
--- C.types[x] = struct (descriptor y) field*
+-- C.types[x] ~ descriptor y ct
 ```
 
 ## JS Prototypes
 
 In JS engines,
 WebAssembly RTTs correspond to JS shape descriptors.
-Custom RTTs act as first-class handles to the engine-managed RTTs,
+Custom descriptors act as first-class handles to the engine-managed RTTs,
 so they can serve as extension points for the JS reflection of the Wasm objects they describe.
 
 We introduce a new `WebAssembly.setDescriptorPrototype()` API
-that takes a custom RTT instance and a prototype object.
-The provided prototype will be attached to the custom RTT
+that takes a custom descriptor instance and a prototype object.
+The provided prototype will be attached to the descriptor's RTT
 and will become the prototype for the JS reflection
-of all Wasm objects the custom RTT describes.
+of all Wasm objects the custom descriptor describes.
 
 The following is a full example that uses `WebAssembly.setDescriptorPrototype()`
 to allow JS to call `get()` and `inc()` methods on counter objects implemented in
@@ -376,9 +395,8 @@ WebAssembly.
 ;; counter.wasm
 (module
   (rec
-    (type $counter (struct (descriptor $counter.vtable (field $val i32))))
-    (type $counter.vtable (struct
-      (describes $counter)
+    (type $counter (descriptor $counter.vtable (struct (field $val i32))))
+    (type $counter.vtable (describes $counter (struct
       (field $get (ref $get_t))
       (field $inc (ref $inc_t))
     ))
@@ -469,9 +487,6 @@ subtype ::=
   | ct:sharecomptype => sub final eps ct
 ```
 
-> TODO: Update the text format in the examples above to reflect this
-> factoring of the syntax.
-
 ### Exact Reference Types
 
 Rather than use two new opcodes in the type opcode space
@@ -553,14 +568,14 @@ The other new instructions are encoded as follows:
 
 ```
 instr ::= ...
-  | 0xFB 34:u32 x:typeidx => ref.get_rtt x
-  | 0xFB 35:u32 rt:reftype => ref.cast_rtt reftype
+  | 0xFB 34:u32 x:typeidx => ref.get_desc x
+  | 0xFB 35:u32 rt:reftype => ref.cast_desc reftype
   | 0xFB 36:u32 (null_1? exact_1?, null_2? exact_2?):castflags
         l:labelidx ht_1:heaptype ht_2:heaptype =>
-      br_on_cast_rtt l (ref null_1? exact_1? ht_1) (ref null_2? exact_2? ht_2)
+      br_on_cast_desc l (ref null_1? exact_1? ht_1) (ref null_2? exact_2? ht_2)
   | 0xFB 37:u32 (null_1? exact_1?, null_2? exact_2?):castflags
         l:labelidx ht_1:heaptype ht_2:heaptype =>
-      br_on_cast_rtt_fail l (ref null_1? exact_1? ht_1) (ref null_2? exact_2? ht_2)
+      br_on_cast_desc_fail l (ref null_1? exact_1? ht_1) (ref null_2? exact_2? ht_2)
 ```
 
 ## Minimal Initial Prototyping for JS Interop
@@ -568,12 +583,12 @@ instr ::= ...
 A truly minimal prototype for experimenting with JS interop can skip
 implementing most of the new features in this proposal:
 
- - Arbitrary fields on custom RTTs.
+ - Arbitrary fields on custom descriptors.
    A minimal prototype can allow `descriptor` clauses only on empty structs.
  - Exact reference types.
-   A minimal prototype can instead bake a custom RTT exactness check into the
+   A minimal prototype can instead bake an RTT exactness check into the
    semantics of `struct.new` and `struct.new_default` to ensure soundness.
  - New instructions.
    A minimal prototype only needs to update `struct.new` and `struct.new_default`
-   to take references to custom RTTs as necessary.
-   It does not need to implement `ref.get_rtt` or any of the new RTT casts.
+   to take references to custom descriptors as necessary.
+   It does not need to implement `ref.get_desc` or any of the new casts.
