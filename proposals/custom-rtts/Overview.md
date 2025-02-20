@@ -4,7 +4,7 @@ This proposal primarily provides mechanisms to:
 
  1. Save memory in WasmGC structs by allowing data associated with source types
     (e.g. static fields, vtables, itables, etc.)
-    to be stored alongside the engine-managed runtime type information (RTT)
+    to be accessed alongside the engine-managed runtime type information (RTT)
     in a custom descriptor object for their corresponding WebAssembly types.
     Rather than using a user-controlled reference field
     to point to this type-associated information,
@@ -34,7 +34,7 @@ not the custom descriptor itself.
 ## Custom Descriptor Definitions
 
 Custom descriptor types are defined struct types with a `describes` clause saying
-what other defined struct type they contain runtime type information for.
+what other defined struct type they provide runtime type information for.
 Similarly, struct types that use custom descriptors have a `descriptor` clause saying
 what type their custom descriptors have.
 
@@ -152,8 +152,9 @@ The latter two rules,
 governing types with or without `describes` clauses,
 are necessary to ensure subtypes have layouts compatible with their supertypes.
 Custom descriptor types (i.e. those with `describes` clauses)
-have different layouts than other structs because their user-controlled fields
-are laid out after the engine-managed RTT for the type they describe.
+may have different layouts than other structs because their user-controlled fields
+might be laid out after the engine-managed RTT for the type they describe.
+(But this is just one possible implementation that we specifically want to allow.)
 
 ```wasm
 (rec
@@ -267,16 +268,16 @@ To facilitate that we introduce exact reference types,
 which are inhabited by references to a particular heap type (and possibly the null value),
 but not any of the heap type's strict subtypes.
 
-Exact reference types can be nullable with the form `(ref exact null ht)`
+Exact reference types can be nullable with the form `(ref null exact ht)`
 or non-nullable with the form `(ref exact ht)`.
 
 For any heap type `ht`:
 
 ```
 (ref ht) <: (ref null ht)
-(ref exact null ht) <: (ref null ht)
+(ref null exact ht) <: (ref null ht)
 (ref exact ht) <: (ref ht)
-(ref exact ht) <: (ref exact null ht)
+(ref exact ht) <: (ref null exact ht)
 ```
 
 Furthermore, to ensure that each type hierarchy remains a lattice,
@@ -300,8 +301,8 @@ as having "hidden" subtypes of `any` and `extern`,
 respectively.
 This preserves our ability to assign them more specific types in the future.
 
-When allocating types with custom RTTs,
-`struct.new` and `struct.new_default` take exact references to the RTTs
+When allocating types with custom descriptors,
+`struct.new` and `struct.new_default` take exact references to the descriptors
 as their first operands.
 This makes the unsound program above invalid.
 
