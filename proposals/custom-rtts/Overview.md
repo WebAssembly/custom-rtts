@@ -508,6 +508,9 @@ reftype :: ...
   | 0x62 ht:absheaptype => ref null exact ht
 ```
 
+Similarly, we allow combining `exact` with the established shorthands in the text format.
+For example `(exact anyref)` is a shorthand for `(ref null exact any)`.
+
 ### Instructions
 
 The existing `ref.test`, `ref.cast`, `br_on_cast` and `br_on_cast_fail` instructions
