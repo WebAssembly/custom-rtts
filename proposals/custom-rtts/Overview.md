@@ -492,23 +492,17 @@ subtype ::=
 
 Rather than use two new opcodes in the type opcode space
 to represent nullable and non-nullable exact reference types,
-we introduce just a single new prefix opcode that encode both:
+we introduce just a single new prefix opcode that encode both.
+To save size on the encoding of nullable types,
+the nullable reference opcode `0x63` is omitted:
 
 ```
 reftype :: ...
   | 0x62 0x64 ht:heaptype => ref exact ht
-  | 0x62 0x63 ht:heaptype => ref null exact ht
+  | 0x62 ht:heaptype => ref null exact ht
 ```
 
-To make the most of the existing shorthands for nullable abstract heap types,
-we also allow using the exact prefix with those shorthands:
-
-```
-reftype :: ...
-  | 0x62 ht:absheaptype => ref null exact ht
-```
-
-Similarly, we allow combining `exact` with the established shorthands in the text format.
+We also allow combining `exact` with the established shorthands in the text format.
 For example `(exact anyref)` is a shorthand for `(ref null exact any)`.
 
 ### Instructions
